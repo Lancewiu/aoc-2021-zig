@@ -9,13 +9,14 @@ const MAP_TOTAL_SIZE = MAP_SIZE * MAP_SIZE;
 fn getRisk(index: usize, section: []u4) u64 {
     const x = index % MAP_SIZE;
     const y = index / MAP_SIZE;
-    const sec_y_i = y % SEC_SIZE;
-    const sec_x_i = x % SEC_SIZE;
+    const sec_y = y % SEC_SIZE;
+    const sec_x = x % SEC_SIZE;
     const sec_dist: u64 = (y / SEC_SIZE) + (x / SEC_SIZE);
-    const risks = [_]u64{1, 2, 3, 4, 5, 6, 7, 8, 9};
-    const origin_risk = section[sec_y_i * SEC_SIZE + sec_x_i];
-    const risk_i = (sec_dist + (origin_risk - 1)) % risks.len;
-    return risks[risk_i];
+    const risk_values = [_]u64{ 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+    const sec_risk: u64 = section[sec_y * SEC_SIZE + sec_x];
+    const risk_i = (sec_dist + (sec_risk - 1)) % risk_values.len;
+    const risk = risk_values[risk_i];
+    return risk;
 }
 
 fn pushPriority(index: usize, risk: []u64, pq: *std.ArrayList(usize)) !void {
@@ -28,19 +29,13 @@ fn pushPriority(index: usize, risk: []u64, pq: *std.ArrayList(usize)) !void {
     }
 
     const insert_risk = risk[index];
-    var left: usize = 0;
-    var right = pq.items.len;
-    const insert = while (right > left) {
-        const mid = (right - left) / 2;
-        if (risk[mid] == insert_risk) {
-            break mid;
-        } else if (risk[mid] < insert_risk) {
-            right = mid;
-        } else {
-            left = mid + 1;
+    for (pq.items, 0..) |q_index, i| {
+        if (risk[q_index] < insert_risk) {
+            try pq.insert(i, index);
+            return;
         }
-    } else left;
-    try pq.insert(insert, index);
+    }
+    try pq.append(index);
 }
 
 fn find(alloc: std.mem.Allocator, section: []u4) !u64 {
@@ -67,32 +62,40 @@ fn find(alloc: std.mem.Allocator, section: []u4) !u64 {
             const east = cursor + 1;
             if (!visited[east]) {
                 const new_risk = cursor_risk + getRisk(east, section);
-                risk[east] = @min(new_risk, risk[east]);
-                try pushPriority(east, risk, &pq);
+                if (new_risk < risk[east]) {
+                    risk[east] = new_risk;
+                    try pushPriority(east, risk, &pq);
+                }
             }
         }
         if (cursor_x > 0) {
             const west = cursor - 1;
             if (!visited[west]) {
                 const new_risk = cursor_risk + getRisk(west, section);
-                risk[west] = @min(new_risk, risk[west]);
-                try pushPriority(west, risk, &pq);
+                if (new_risk < risk[west]) {
+                    risk[west] = new_risk;
+                    try pushPriority(west, risk, &pq);
+                }
             }
         }
         if (cursor_y > 0) {
             const north = cursor - MAP_SIZE;
             if (!visited[north]) {
                 const new_risk = cursor_risk + getRisk(north, section);
-                risk[north] = @min(new_risk, risk[north]);
-                try pushPriority(north, risk, &pq);
+                if (new_risk < risk[north]) {
+                    risk[north] = new_risk;
+                    try pushPriority(north, risk, &pq);
+                }
             }
         }
         if (cursor_y < MAP_SIZE - 1) {
             const south = cursor + MAP_SIZE;
             if (!visited[south]) {
                 const new_risk = cursor_risk + getRisk(south, section);
-                risk[south] = @min(new_risk, risk[south]);
-                try pushPriority(south, risk, &pq);
+                if (new_risk < risk[south]) {
+                    risk[south] = new_risk;
+                    try pushPriority(south, risk, &pq);
+                }
             }
         }
     }
