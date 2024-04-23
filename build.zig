@@ -8,8 +8,13 @@ pub fn build(b: *std.Build) void {
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
     // for restricting supported target set are available.
-    const target = b.standardTargetOptions(.{});
-
+    var features = std.Target.Cpu.Feature.Set.empty;
+    features.addFeature(@intFromEnum(std.Target.x86.Feature.avx2));
+    const supported = [_]std.Target.Query{
+        .{ .cpu_arch = .x86_64, .cpu_features_add = features },
+        .{ .cpu_arch = .x86, .cpu_features_add = features },
+    };
+    const target = b.standardTargetOptions(.{ .whitelist = supported[0..] });
     // Standard optimization options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
