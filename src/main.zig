@@ -25,6 +25,19 @@ fn decode(c: u8) !u4 {
     };
 }
 
+const Decoder = std.io.GenericReader(std.io.AnyReader, anyerror, decodeReadFn);
+
+fn decodeReadFn(context: std.io.AnyReader, buffer: []u8) anyerror!usize {
+    var count: usize = 0;
+    for (buffer) |*p| {
+        const high: u8 = try decode(try context.readByte());
+        const low: u8 = try decode(try context.readByte());
+        p.* = (high << 4) & low;
+        count += 1;
+    }
+    return count;
+}
+
 const Context = struct {
     packet: data.OpPacket,
     literals: std.ArrayList(u64),
@@ -54,10 +67,8 @@ pub fn main() !void {
     const alloc = arena.allocator();
     const filename = if (IS_TESTING) "test.txt" else "input.txt";
     const bytebuf = @embedFile(filename);
-    var wordbuf: [bytebuf.len]u4 = undefined;
-    for (bytebuf[0..], 0..) |byte, i| wordbuf[i] = try decode(byte);
-    var wordstream = std.io.fixedBufferStream(wordbuf[0..]);
-    var bitreader = std.io.bitReader(.big, wordstream.reader());
+    var bytestream = std.io.fixedBufferStream(bytebuf);
+    var bitreader = std.io.bitReader(.big, Decoder{ .context = bytestream.reader().any() });
     var contexts = std.ArrayList(Context).init(alloc);
     while (true) {
         _ = try bitreader.readBitsNoEof(u3, 3); // ver
