@@ -31,7 +31,10 @@ fn decodeReadFn(context: std.io.AnyReader, buffer: []u8) anyerror!usize {
     var count: usize = 0;
     for (buffer) |*p| {
         const high: u8 = try decode(try context.readByte());
-        const low: u8 = try decode(try context.readByte());
+        const low: u8 = try decode(context.readByte() catch |err| switch (err) {
+            error.EndOfStream => '0', // still return high.
+            else => return err,
+        });
         p.* = (high << 4) & low;
         count += 1;
     }
