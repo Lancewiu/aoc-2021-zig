@@ -1,66 +1,74 @@
 const std = @import("std");
+const assert = std.debug.assert;
 const data = @import("packet.zig");
 
 const IS_TESTING = true;
 
-fn decode(c: u8) !u4 {
+fn decode(c: u8) ![4]u1 {
     return switch (c) {
-        '0' => 0x0,
-        '1' => 0x1,
-        '2' => 0x2,
-        '3' => 0x3,
-        '4' => 0x4,
-        '5' => 0x5,
-        '6' => 0x6,
-        '7' => 0x7,
-        '8' => 0x8,
-        '9' => 0x9,
-        'A' => 0xA,
-        'B' => 0xB,
-        'C' => 0xC,
-        'D' => 0xD,
-        'E' => 0xE,
-        'F' => 0xF,
-        else => error.InvalidCharacter,
+        '0' => .{ 0, 0, 0, 0 },
+        '1' => .{ 0, 0, 0, 1 },
+        '2' => .{ 0, 0, 1, 0 },
+        '3' => .{ 0, 0, 1, 1 },
+        '4' => .{ 0, 1, 0, 0 },
+        '5' => .{ 0, 1, 0, 1 },
+        '6' => .{ 0, 1, 1, 0 },
+        '7' => .{ 0, 1, 1, 1 },
+        '8' => .{ 1, 0, 0, 0 },
+        '9' => .{ 1, 0, 0, 1 },
+        'A' => .{ 1, 0, 1, 0 },
+        'B' => .{ 1, 0, 1, 1 },
+        'C' => .{ 1, 1, 0, 0 },
+        'D' => .{ 1, 1, 0, 1 },
+        'E' => .{ 1, 1, 1, 0 },
+        'F' => .{ 1, 1, 1, 1 },
+        else => error.InvalidEncodeChar,
     };
-}
-
-const Decoder = std.io.GenericReader(std.io.AnyReader, anyerror, decodeReadFn);
-
-fn decodeReadFn(context: std.io.AnyReader, buffer: []u8) anyerror!usize {
-    var count: usize = 0;
-    for (buffer) |*p| {
-        const high: u8 = try decode(try context.readByte());
-        const low: u8 = try decode(context.readByte() catch |err| switch (err) {
-            error.EndOfStream => '0', // still return high.
-            else => return err,
-        });
-        p.* = (high << 4) & low;
-        count += 1;
-    }
-    return count;
 }
 
 const Context = struct {
     packet: data.OpPacket,
     literals: std.ArrayList(u64),
 
-    pub fn isComplete(self: Context) bool {
+    fn isComplete(self: Context) bool {
         return self.packet.count >= self.packet.limit;
     }
 
-    pub fn addBits(self: *Context, bits: u16) void {
+    fn addBits(self: *Context, bits: u16) void {
         if (self.packet.packmode == .npackets) return;
         self.packet.count += bits;
     }
 
-    pub fn incrementSubCount(self: *Context) void {
+    fn incrementSubCount(self: *Context) void {
         if (self.packet.packmode == .nbits) return;
         self.packet.count += 1;
     }
 
-    pub fn complete(self: Context) data.ProcessError!u64 {
+    fn complete(self: Context) data.ProcessError!u64 {
         return self.packet.opfn(self.literals.items);
+    }
+};
+
+const Bits = struct {
+    i: usize,
+    buf: []u1,
+
+    fn init(slice: []u1) Bits {
+        return .{ .i = 0, .buf = slice };
+    }
+
+    fn readInt(self: *Bits, count: u4) !u16 {
+        if (self.i > self.buf.len) return error.EndOfBitsBuffer;
+        if (0 == count) return 0;
+        var val: u16 = 0;
+        for (self.buf[self.i..][0..count], 0..) |bit, i| {
+            if (1 == bit) val |= @as(u16, 1) << (count - 1 - std.math.lossyCast(u4, i));
+        }
+        return val;
+    }
+
+    fn skip(self: *Bits, count: u4) void {
+        self.i +|= count;
     }
 };
 
@@ -70,28 +78,33 @@ pub fn main() !void {
     const alloc = arena.allocator();
     const filename = if (IS_TESTING) "test.txt" else "input.txt";
     const bytebuf = @embedFile(filename);
-    var bytestream = std.io.fixedBufferStream(bytebuf);
-    var bitreader = std.io.bitReader(.big, Decoder{ .context = bytestream.reader().any() });
+    var bitbuf: [4 * bytebuf.len]u1 = undefined;
+    for (bytebuf[0..], 0..) |byte, i| {
+        if (byte == '\r' or byte == '\n') break;
+        const bitoffset = 4 * i;
+        const word = try decode(byte);
+        for (0..4) |ibit| bitbuf[bitoffset..][ibit] = word[ibit];
+    }
     var contexts = std.ArrayList(Context).init(alloc);
-    while (true) {
-        _ = try bitreader.readBitsNoEof(u3, 3); // ver
-        const packet_type = try bitreader.readBitsNoEof(u3, 3);
-        var bit_count: u16 = 6;
+    var bits = Bits.init(bitbuf[0..]);
+
+    while (bits.i < bits.buf.len) {
+        const istart = bits.i;
+        bits.skip(3);
+        const packet_type = try bits.readInt(3);
 
         if (4 != packet_type) {
             // op
             const opid = try std.meta.intToEnum(data.OpId, packet_type);
-            const packmode = try std.meta.intToEnum(data.PackMode, try bitreader.readBitsNoEof(u1, 1));
+            const packmode = try std.meta.intToEnum(
+                data.PackMode,
+                try bits.readInt(1),
+            );
             const limit: u16 = switch (packmode) {
-                .npackets => lim: {
-                    bit_count += 11;
-                    break :lim try bitreader.readBitsNoEof(u11, 11);
-                },
-                .nbits => lim: {
-                    bit_count += 15;
-                    break :lim try bitreader.readBitsNoEof(u15, 15);
-                },
+                .npackets => try bits.readInt(11),
+                .nbits => try bits.readInt(15),
             };
+            const bit_count: u16 = @truncate(bits.i - istart);
             for (contexts.items) |*ctx| {
                 ctx.addBits(bit_count);
                 if (ctx.isComplete()) return error.PacketTruncated;
@@ -112,14 +125,14 @@ pub fn main() !void {
         var literal: u64 = 0;
         var lsh: u6 = 60;
         while (true) {
-            const is_last = 0 == try bitreader.readBitsNoEof(u1, 1);
-            const seg = try bitreader.readBitsNoEof(u4, 4);
-            bit_count += 5;
+            const is_last = 0 == try bits.readInt(1);
+            const seg = try bits.readInt(4);
             literal += @as(u64, @intCast(seg)) << lsh;
             if (!is_last and 0 == lsh) return error.LiteralOverflow;
             if (is_last) break;
             lsh -= 4;
         }
+        const bit_count: u16 = @truncate(bits.i - istart);
         for (contexts.items) |*ctx| ctx.addBits(bit_count);
         var last_ctx = &contexts.items[contexts.items.len - 1];
         last_ctx.incrementSubCount();
