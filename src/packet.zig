@@ -17,7 +17,7 @@ fn sum(literals: []u64) ProcessError!u64 {
 }
 
 fn prod(literals: []u64) ProcessError!u64 {
-    var v: u64 = 0;
+    var v: u64 = 1;
     for (literals) |l| {
         const res = @mulWithOverflow(v, l);
         if (0 < res[1]) return ProcessError.Overflow;
